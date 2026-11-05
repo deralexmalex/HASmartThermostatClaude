@@ -1,6 +1,6 @@
 import math
 import logging
-from time import time
+from time import monotonic, time
 from collections import deque, namedtuple
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,6 +22,8 @@ class PID:
             sampling_period=0,
             cold_tolerance=0.3,
             hot_tolerance=0.3,
+            max_dt=None,
+            time_func=monotonic,
     ):
         """A proportional-integral-derivative controller.
         :param kp: Proportional coefficient.
@@ -42,6 +44,10 @@ class PID:
         :type cold_tolerance: float
         :param hot_tolerance: Temperature threshold tolerance above setpoint when OFF.
         :type hot_tolerance: float
+        :param max_dt: Upper bound in seconds of the time step used to integrate. None disables it.
+        :type max_dt: float
+        :param time_func: Monotonic clock returning seconds, used to measure the time between calculations.
+        :type time_func: callable
         """
         if kp is None:
             raise ValueError("kp must be specified")
@@ -71,7 +77,12 @@ class PID:
         self._input_diff = 0
         self._dext = 0
         self._dt = 0
+        self._dt_i = 0
+        self._max_dt = max_dt
+        self._time_func = time_func
+        self._last_calc_time = None
         self._last_output = 0
+        self._last_total = 0
         self._output = 0
         self._external = 0
         self._mode = "AUTO"
@@ -86,6 +97,8 @@ class PID:
     @mode.setter
     def mode(self, mode):
         assert mode.upper() in ["AUTO", "OFF"]
+        if mode.upper() != self._mode:
+            self.reset_time_base()
         self._mode = mode.upper()
 
     @property
@@ -137,6 +150,19 @@ class PID:
     def dt(self):
         return self._dt
 
+    @property
+    def integration_dt(self):
+        """Time step in seconds used for the last integration."""
+        return self._dt_i
+
+    @property
+    def max_dt(self):
+        return self._max_dt
+
+    @max_dt.setter
+    def max_dt(self, max_dt):
+        self._max_dt = max_dt
+
     def set_pid_param(self, kp=None, ki=None, kd=None, ke=None):
         """Set PID parameters dynamically."""
         if kp is not None and isinstance(kp, (int, float)):
@@ -156,6 +182,13 @@ class PID:
         self._last_input = None
         self._last_input_time = None
         self._integral = 0.0
+        self.reset_time_base()
+
+    def reset_time_base(self):
+        """Forget the time of the last calculation, the next one integrates with dt = 0.
+        The integral is kept."""
+        self._last_calc_time = None
+        self._dt_i = 0
 
     def calc(
             self, input_val, set_point, input_time=None, last_input_time=None, ext_temp=None
@@ -185,6 +218,7 @@ class PID:
         self._set_point = set_point
 
         if self.mode == "OFF":
+            self.reset_time_base()
             # If PID is off, simply switch between min and max output
             if input_val <= set_point - self._cold_tolerance:
                 self._output = self._out_max
@@ -218,15 +252,34 @@ class PID:
         # Feedforward compensation value for external temperature
         self._external = self._Ke * self._dext
 
-        # Anti-windup clamping: only integrate if output is not saturated
-        saturated_high = self._last_output >= self._out_max
-        saturated_low = self._last_output <= self._out_min
+        # Time step of the integration: real time elapsed since the previous calculation,
+        # independent of the sensor timestamps. The first calculation after a start or a
+        # re-enable integrates with dt = 0, long pauses are bounded by max_dt.
+        now = self._time_func()
+        if self._last_calc_time is not None and now > self._last_calc_time:
+            dt_i = now - self._last_calc_time
+            if self._max_dt:
+                dt_i = min(dt_i, self._max_dt)
+        else:
+            dt_i = 0
+        self._last_calc_time = now
+        self._dt_i = dt_i
+
+        # Anti-windup: the saturation is evaluated on the last total output, outdoor part included.
+        saturated_high = self._last_total >= self._out_max
+        saturated_low = self._last_total <= self._out_min
         pushing_deeper = (saturated_high and self._error > 0) or (
                 saturated_low and self._error < 0
         )
 
-        if not pushing_deeper and self._dt > 0:
-            self._integral += self._Ki * self._error * self._dt
+        step = self._Ki * self._error * dt_i
+        if step != 0:
+            if not pushing_deeper:
+                self._integral += step
+            elif step * self._integral < 0:
+                # Leaving the saturation: the integral may unwind towards zero, but not beyond.
+                new_integral = self._integral + step
+                self._integral = 0.0 if new_integral * self._integral < 0 else new_integral
 
         if self._Ki:
             # Clamp integral term taking external compensation into account
@@ -245,6 +298,7 @@ class PID:
 
         # Compute raw PID Output (downstream climate component handles final output clamping)
         self._output = self._proportional + self._integral + self._derivative
+        self._last_total = self._output + self._external
         return self._output, True
 
 

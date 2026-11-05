@@ -540,6 +540,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             self._sampling_period.seconds,
             self._cold_tolerance,
             self._hot_tolerance,
+            self._max_pid_dt(),
         )
         if self._autotune != "none":
             self._pid_controller.mode = "OFF"
@@ -1085,18 +1086,19 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
                     hvac_mode,
                 )
                 await self._async_set_valve_value(self._control_output)
-            # Clear the samples to avoid integrating the off period
+            # Reset the time base to avoid integrating the off period, the integral is kept
             self._previous_temp = None
             self._previous_temp_time = None
             self._last_pid_calc_time = None
             if self._pid_controller is not None:
-                self._pid_controller.clear_samples()
+                self._pid_controller.reset_time_base()
         else:
             _LOGGER.error("%s: Unrecognized HVAC mode: %s", self.entity_id, hvac_mode)
             return
 
         # Clear samples when toggling between active modes (HEAT <-> COOL). Not when the mode is
         # first set at startup (old mode None): that would discard the integral restored from pid_i.
+        # Not either when coming from OFF: the learned integral is kept, only the time base restarts.
         if (
                 old_hvac_mode is not None
                 and old_hvac_mode != self._hvac_mode
@@ -1105,7 +1107,10 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             self._previous_temp = None
             self._previous_temp_time = None
             self._last_pid_calc_time = None
-            self._pid_controller.clear_samples()
+            if old_hvac_mode == HVACMode.OFF:
+                self._pid_controller.reset_time_base()
+            else:
+                self._pid_controller.clear_samples()
 
         if self._pid_controller:
             # Apply the new output limits to the PID controller after changing the mode
@@ -1594,6 +1599,11 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             # if boost_pid_off is false, don't change the PID mode
             await self._async_control_heating(calc_pid=True)
 
+    def _max_pid_dt(self):
+        """Upper bound of the integration time step: twice the PID calculation period."""
+        period = self._sampling_period or self._keep_alive
+        return 2 * period.total_seconds() if period else None
+
     async def calc_pid(self, time_func: object = None):
         """calculate control output and handle autotune"""
         if self._hvac_mode == HVACMode.OFF or self._current_temp is None or self._target_temp is None:
@@ -1642,6 +1652,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
                         self._sampling_period.seconds,
                         self._cold_tolerance,
                         self._hot_tolerance,
+                        self._max_pid_dt(),
                     )
                     self._autotune = "none"
             self._pid_output = self._pid_autotune.output
