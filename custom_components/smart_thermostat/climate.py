@@ -1098,7 +1098,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
 
         # Clear samples when toggling between active modes (HEAT <-> COOL). Not when the mode is
         # first set at startup (old mode None): that would discard the integral restored from pid_i.
-        # Not either when coming from OFF: the learned integral is kept, only the time base restarts.
+        # Not either when going to or coming from OFF: the learned integral is kept, only the time base restarts.
         if (
                 old_hvac_mode is not None
                 and old_hvac_mode != self._hvac_mode
@@ -1107,7 +1107,7 @@ class SmartThermostat(ClimateEntity, RestoreEntity, ABC):
             self._previous_temp = None
             self._previous_temp_time = None
             self._last_pid_calc_time = None
-            if old_hvac_mode == HVACMode.OFF:
+            if old_hvac_mode == HVACMode.OFF or self._hvac_mode == HVACMode.OFF:
                 self._pid_controller.reset_time_base()
             else:
                 self._pid_controller.clear_samples()

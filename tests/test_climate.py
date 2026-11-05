@@ -141,6 +141,8 @@ async def test_small_ki_is_accepted_set_and_restored(hass):
     )
     assert hass.states.get("climate.test_thermostat").attributes["ki"] == 2e-6
 
+    hass.states.async_set("sensor.temperature", "20.0")
+    await hass.async_block_till_done()
     for mode in (HVACMode.OFF, HVACMode.HEAT):
         await hass.services.async_call(
             CLIMATE_DOMAIN,
