@@ -101,6 +101,56 @@ async def test_restore_state_pid_i_and_gains(hass):
     assert state.attributes["pid_mode"] == "auto"
 
 
+async def test_small_ki_is_accepted_set_and_restored(hass):
+    """Ki = 1e-5 is accepted from config, by the set_pid_gain service and on restore, and the
+    integral is kept when the thermostat is switched off and on again."""
+    mock_restore_cache(
+        hass,
+        (
+            State(
+                "climate.test_thermostat",
+                HVACMode.HEAT,
+                attributes={"pid_i": 12.3, "ki": 1e-5, "pid_mode": "auto"},
+            ),
+        ),
+    )
+    config = {
+        CLIMATE_DOMAIN: {
+            "platform": DOMAIN,
+            "name": "Test Thermostat",
+            "heater": "switch.heater_switch",
+            "target_sensor": "sensor.temperature",
+            "target_temp": 20.0,
+            "kp": 10.0,
+            "ki": 0.000001,
+            "kd": 0.0,
+            "keep_alive": timedelta(seconds=60),
+        }
+    }
+    assert await async_setup_component(hass, CLIMATE_DOMAIN, config)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("climate.test_thermostat")
+    assert state.attributes["ki"] == 1e-5
+
+    await hass.services.async_call(
+        DOMAIN,
+        "set_pid_gain",
+        {"entity_id": "climate.test_thermostat", "ki": 2e-6},
+        blocking=True,
+    )
+    assert hass.states.get("climate.test_thermostat").attributes["ki"] == 2e-6
+
+    for mode in (HVACMode.OFF, HVACMode.HEAT):
+        await hass.services.async_call(
+            CLIMATE_DOMAIN,
+            "set_hvac_mode",
+            {"entity_id": "climate.test_thermostat", "hvac_mode": mode},
+            blocking=True,
+        )
+    assert hass.states.get("climate.test_thermostat").attributes["pid_i"] == 12.3
+
+
 async def test_turn_on_turn_off_services(hass):
     """Test standard climate services (turn_on / turn_off)."""
     config = {
