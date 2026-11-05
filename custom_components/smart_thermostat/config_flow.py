@@ -47,6 +47,9 @@ DURATION_SELECTOR = selector.DurationSelector(
 NUMBER_SELECTOR = selector.NumberSelector(
     selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, step=0.1)
 )
+KI_SELECTOR = selector.NumberSelector(
+    selector.NumberSelectorConfig(mode=selector.NumberSelectorMode.BOX, step=0.000001)
+)
 TEMPERATURE_SELECTOR = selector.NumberSelector(
     selector.NumberSelectorConfig(
         mode=selector.NumberSelectorMode.BOX,
@@ -135,7 +138,7 @@ PRESETS_SCHEMA = vol.Schema(
 PID_SCHEMA = vol.Schema(
     {
         vol.Required(const.CONF_KP, default=const.DEFAULT_KP): NUMBER_SELECTOR,
-        vol.Required(const.CONF_KI, default=const.DEFAULT_KI): NUMBER_SELECTOR,
+        vol.Required(const.CONF_KI, default=const.DEFAULT_KI): KI_SELECTOR,
         vol.Required(const.CONF_KD, default=const.DEFAULT_KD): NUMBER_SELECTOR,
         vol.Optional(const.CONF_KE, default=const.DEFAULT_KE): NUMBER_SELECTOR,
         vol.Required(const.CONF_PWM, default=const.DEFAULT_PWM_DURATION): DURATION_SELECTOR,
